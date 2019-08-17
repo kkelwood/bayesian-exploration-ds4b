@@ -1,0 +1,1227 @@
+---
+title: "Individual Project: Model Selection"
+author: "Kelsey Elwood"
+date: "12/20/2018"
+output: 
+    github_document:
+        pandoc_args: --webtex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Preparation
+
+```{r libraries, results=FALSE, message=FALSE, warning=FALSE}
+# Set up for Bayesian analysis (order is important):
+library(tidyr)
+library(dplyr)
+library(lme4)
+library(ggplot2)
+library(rstanarm)
+options(mc.cores = parallel::detectCores())
+theme_set(theme_grey()) #rstanarm overrides default ggplot theme: set it back
+
+```
+
+```{r data}
+# Load data
+nwt_ffd <- read.csv(file = "data/NWT_ITEX_FFD_data_2007-8.csv", na.strings = ".") %>% 
+    
+    # create 0,1 vector for values
+    mutate(Snow_x = ifelse(Snow == "X", "0", "1")) %>%
+    mutate(Temp_x = ifelse(Temp == "X", "0", "1")) %>%
+    mutate(N_x = ifelse(N == "X", "0", "1")) %>%   
+    
+    # rename the values to be more true to their meaning:
+    mutate(Snow = as.factor(ifelse(Snow == "X", "Reduced_Snowpack", "Increased_Snowpack"))) %>%
+    mutate(Temp = as.factor(ifelse(Temp == "X", "Ambient_Temp", "Warmer_Temp"))) %>%
+    mutate(N = as.factor(ifelse(N == "X", "Ambient_N", "Increased_N"))) %>% 
+    
+    # create a new column for "subblock"
+    mutate(Subblock = as.factor(ifelse(Snow == "Reduced_Snowpack", 0, 1))) %>% 
+    
+    # define "Block" as a factor
+    mutate(Block = as.factor(Block)) %>% 
+    
+    # create a new Block|Subblock column
+    mutate(Subblock_ID = as.factor(paste0(Block, "_", Subblock))) %>% 
+    
+    # remove 2 unnecessary (and empty) columns
+    select(-c("X", "X.1")) 
+
+# Convert data frame with species as a vector
+nwt_ffd2 <- nwt_ffd %>% 
+    gather(key = Species, value = FFD, 8:35, na.rm = TRUE, factor_key = TRUE) %>% 
+    mutate(Species = factor(Species)) %>% 
+    mutate(log_FFD = log(FFD)) 
+
+# Subset data for 2007 (2008 was incomplete) and centered FFD
+nwt_ffd2_2007 <- nwt_ffd2 %>% 
+    filter(year == "2007") %>% 
+    mutate(FFD_s = scale(FFD))
+
+# create a new column for FFD based on visit number (rather than Julian day)
+days_visited <- as.vector(sort(unique(nwt_ffd2_2007$FFD)))
+number_visits <- length(days_visited)
+Visit <- as.vector(1:number_visits)
+visits_df <- data.frame(days_visited, Visit)
+nwt_ffd2_2007 <- merge(nwt_ffd2_2007, visits_df, by.x = "FFD", by.y = "days_visited")
+
+# subset of DESCAE (Deschampsia cespitosa) in 2007, with centered FFD
+nwt_descae_2007 <- nwt_ffd2 %>% 
+    filter(Species == "DESCAE") %>% 
+    filter(year == "2007") %>% 
+    merge(visits_df, by.x = "FFD", by.y = "days_visited") %>% 
+    mutate(FFD_s = scale(FFD))
+
+```
+
+
+# Model Options
+
+### Model 1: N x Temp x Snow for Deschampsia in 2007
+
+The following model is based on the apriori expectations that Nitrogen (N), Temperature (Temp), and Snow (Snow) all contribute to first flowering date (FFD). All interactions between the three explanatory variables are also included as explanatory parameters. First flowering date (FFD) is the response variable. FFD_s represents the centered values of FFD. Levels include sub-blocks within blocks. Data is a subset of the full dataset and only includes FFD for one species (DESCAE) in one year (2007).
+
+```{r apriori_models}
+
+# Model 1a1: FFD, poisson --> converged (with 2 chains)
+unitID <- 1:nrow(nwt_descae_2007) #set this up first, where df is the dataframe name
+bayes_NxTxS_descae <- stan_glmer(FFD ~ N*Temp*Snow + (1|Block / Subblock) + (1|unitID), 
+                          family = poisson,
+                          data = nwt_descae_2007,
+                          adapt_delta = 0.9999999999999999,
+                          chains = 2)
+vcov(bayes_NxTxS_descae, correlation=TRUE)
+
+# Model 1a2: Visit, poisson --> converged!
+bayes_NxTxS_descae_visit <- stan_glmer(Visit ~ N*Temp*Snow + (1|Block / Subblock) + (1|unitID), 
+                          family = poisson,
+                          data = nwt_descae_2007,
+                          adapt_delta = 0.99999999)
+vcov(bayes_NxTxS_descae_visit, correlation=TRUE)
+
+# Model 1b: FFD, gaussian
+start_time <- Sys.time()
+bayes_NxTxS_descae2 <- stan_glmer(FFD ~ N*Temp*Snow + (1|Block / Subblock), 
+                          family = gaussian,
+                          data = nwt_descae_2007,
+                          adapt_delta = 0.999999)
+end_time <- Sys.time()
+vcov(bayes_NxTxS_descae2, correlation=TRUE)
+bayes_NxTxS_descae2_time <- end_time - start_time
+bayes_NxTxS_descae2_time
+
+# Model 1c: FFD_s, gaussian
+start_time <- Sys.time()
+bayes_NxTxS_descae3 <- stan_glmer(FFD_s ~ N*Temp*Snow + (1|Block / Subblock), 
+                          family = gaussian,
+                          data = nwt_descae_2007,
+                          adapt_delta = 0.999)
+end_time <- Sys.time()
+vcov(bayes_NxTxS_descae3, correlation=TRUE)
+bayes_NxTxS_descae3_time <- end_time - start_time
+bayes_NxTxS_descae3_time
+
+
+# Model 1d: FFD_s, poisson
+## Error: All outcome values must be counts for Poisson models
+```
+
+
+```{r model1_comparisons}
+# Exclude Model 1d due to inability to use poisson with the centered data
+loo_1a <- loo(bayes_NxTxS_descae, k_threshold = 0.7)
+loo_1b <- loo(bayes_NxTxS_descae2, k_threshold = 0.7)
+loo_1c <- loo(bayes_NxTxS_descae3, k_threshold = 0.7)
+
+cbind(loo_1a$estimates, loo_1b$estimates, loo_1c$estimates)
+
+```
+
+__Plot that corresponds with Model 1c: Centered FFD__
+```{r}
+p1 <- ggplot(data = nwt_descae_2007) +
+    geom_histogram(mapping = aes(x = FFD_s, y = stat(density), fill = Snow,), 
+                   position = "identity", 
+                   alpha = 0.5, 
+                   na.rm = TRUE, 
+                   binwidth = 0.2) + 
+    geom_density(mapping = aes(x = FFD_s, col = Snow)) +
+    facet_grid(N ~ Temp) +
+    labs(title = "Figure 1.", 
+         subtitle = "FFD (centered) as a function of Snowpack, Temperature, and Nitrogen",
+         x = "FFD (centered) of Deschampsia cespitosa")
+
+p1
+
+```
+
+__Alternative plot that corresponds with Model 1a & 1b: does NOT center FFD__
+```{r}
+p2 <- ggplot(data = nwt_descae_2007) +
+    geom_histogram(mapping = aes(x = Visit, y = stat(density), fill = Snow,), 
+                   position = "identity", 
+                   alpha = 0.5, 
+                   na.rm = TRUE, 
+                   binwidth = 1) + 
+    geom_density(mapping = aes(x = Visit, col = Snow)) +
+    facet_grid(N ~ Temp) +
+    labs(title = "Figure 2.", 
+         subtitle = "FFD as a function of Snowpack, Temperature, and Nitrogen",
+         x = "FFD of Deschampsia cespitosa (Visit Day)")
+
+p2
+
+```
+
+#### Single factor models (Model 1)
+
+```{r}
+#' Single factor models
+bayes_N <- stan_glmer(FFD_s ~ N + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_T <- stan_glmer(FFD_s ~ Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_S <- stan_glmer(FFD_s ~ Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+### Single factor models with one 2-way interaction (Model 1)
+```{r}
+# Nitrogen as the single factor
+bayes_N_NxT <- stan_glmer(FFD_s ~ N + N:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_N_NxS <- stan_glmer(FFD_s ~ N + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_N_TxS <- stan_glmer(FFD_s ~ N + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+# Temp as the single factor
+bayes_T_NxT <- stan_glmer(FFD_s ~ Temp + N:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_T_NxS <- stan_glmer(FFD_s ~ Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_T_TxS <- stan_glmer(FFD_s ~ Temp + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+# Snow as the single factor
+bayes_S_NxT <- stan_glmer(FFD_s ~ Snow + N:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_S_NxS <- stan_glmer(FFD_s ~ Snow + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_S_TxS <- stan_glmer(FFD_s ~ Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+### Single factor models with two 2-way interactions (Model 1)
+```{r single-factor-with-two-2way-interactions}
+# Nitrogen as the single factor
+bayes_N_NxT_NxS <- stan_glmer(FFD_s ~ N + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_N_NxT_TxS <- stan_glmer(FFD_s ~ N + N:Temp + Temp:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_N_NxS_TxS <- stan_glmer(FFD_s ~ N + N:Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+# Temp as the single factor
+bayes_T_NxT_NxS <- stan_glmer(FFD_s ~ Temp + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_T_NxT_TxS <- stan_glmer(FFD_s ~ Temp + N:Temp + Temp:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_T_NxS_TxS <- stan_glmer(FFD_s ~ Temp + N:Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+
+# Snow as the single factor
+bayes_S_NxT_NxS <- stan_glmer(FFD_s ~ N + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_S_NxT_TxS <- stan_glmer(FFD_s ~ N + N:Temp + Temp:Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99)
+
+bayes_S_NxS_TxS <- stan_glmer(FFD_s ~ N + N:Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+
+### Two factor models - no interactions (Model 1)
+
+```{r two-factor-with-no-interactions}
+#' Two factor models
+bayes_NT <- stan_glmer(FFD_s ~ N + Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+bayes_NS <- stan_glmer(FFD_s ~ N + Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+bayes_TS <- stan_glmer(FFD_s ~ Temp + Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999)
+
+```
+
+### Two factor models WITH interactions (Model 1)
+
+```{r two-factor-with-2way-interaction}
+# Two factor models
+bayes_NxT <- stan_glmer(FFD_s ~ N*Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_NxS <- stan_glmer(FFD_s ~ N*Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_TxS <- stan_glmer(FFD_s ~ Temp*Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+### Three factor models - no interactions (Model 1)
+```{r three-factor-with-no-interactions}
+# Three-way model: N, Temp, Snow
+
+bayes_NTS <- stan_glmer(FFD_s ~ N + Temp + Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+### Three factor models WITH one 2-way interactions (Model 1)
+```{r three-factor-with-one-2way-interaction}
+bayes_NTS_NxT <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_NTS_NxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_NTS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+```
+
+### Three factor model with two 2-way interactions (Model 1)
+```{r three-factor-with-two-2way-interactions}
+bayes_NTS_NxT_NxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_NTS_NxT_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+bayes_NTS_NxS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N: Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+```
+
+### Three factor model with three 2-way interactions (Model 1)
+```{r three-factor-with-three-2way-interactions}
+bayes_NTS_NxT_NxS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N:Snow + Temp:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+```
+
+## Compare all variations of Model 1
+```{r model_comparison_looic}
+# Single factor (no interactions)
+loo_N <- loo(bayes_N, k_threshold = 0.7)
+loo_T <- loo(bayes_T, k_threshold = 0.7)
+loo_S <- loo(bayes_S, k_threshold = 0.7)
+compare_models(loo_N, loo_T, loo_S)
+
+# Single factor with one 2-way interaction
+loo_N_NxT <- loo(bayes_N_NxT, k_threshold = 0.7)
+loo_N_NxS <- loo(bayes_N_NxS, k_threshold = 0.7)
+loo_N_SxT <- loo(bayes_N_TxS, k_threshold = 0.7)
+loo_T_NxT <- loo(bayes_T_NxT, k_threshold = 0.7)
+loo_T_NxS <- loo(bayes_T_NxS, k_threshold = 0.7)
+loo_T_SxT <- loo(bayes_T_TxS, k_threshold = 0.7)
+loo_S_NxT <- loo(bayes_S_NxT, k_threshold = 0.7)
+loo_S_NxS <- loo(bayes_S_NxS, k_threshold = 0.7)
+loo_S_SxT <- loo(bayes_S_TxS, k_threshold = 0.7)
+compare_models(loo_N_NxT, loo_N_NxS, loo_N_SxT,
+               loo_T_NxT, loo_T_NxS, loo_T_SxT,
+               loo_S_NxT, loo_S_NxS, loo_S_SxT)
+
+# Single factor with two 2-way interactions
+
+
+# Single factor with one 3-way interaction
+
+
+# Two factor (no interactions)
+loo_NT <- loo(bayes_NT, k_threshold = 0.7)
+loo_TS <- loo(bayes_TS, k_threshold = 0.7)
+loo_NS <- loo(bayes_NS, k_threshold = 0.7)
+compare_models(loo_NT, loo_TS, loo_NS)
+
+# Two factor with one 2-way interaction
+loo_NxT <- loo(bayes_NxT, k_threshold = 0.7)
+loo_TxS <- loo(bayes_TxS, k_threshold = 0.7)
+loo_NxS <- loo(bayes_NxS, k_threshold = 0.7)
+compare_models(loo_NxT, loo_TxS, loo_NxS)
+
+# Three factor with no interaction
+loo_NTS <- loo(bayes_NTS, k_threshold = 0.7)
+
+# Three factor with one 2-way interaction
+loo_NTS_NxT <- loo(bayes_NTS_NxT, k_threshold = 0.7)
+loo_NTS_NxS <- loo(bayes_NTS_NxS, k_threshold = 0.7)
+loo_NTS_TxS <- loo(bayes_NTS_TxS, k_threshold = 0.7)
+compare_models(loo_NTS_NxT, loo_NTS_NxS, loo_NTS_TxS)
+
+# Three factor with two 2-way interactions
+loo_NTS_NxT_NxS <- loo(bayes_NTS_NxT_NxS, k_threshold = 0.7)
+loo_NTS_NxT_TxS <- loo(bayes_NTS_NxT_TxS, k_threshold = 0.7)
+loo_NTS_NxS_TxS <- loo(bayes_NTS_NxS_TxS, k_threshold = 0.7)
+compare_models(loo_NTS_NxT_NxS, loo_NTS_NxT_TxS, loo_NTS_NxS_TxS)
+
+# Three factor with one 3-way interaction
+loo_NTS_NxT_NxS_TxS <- loo(bayes_NTS_NxT_NxS_TxS, k_threshold = 0.7)
+
+# Three factor with all 2-way and 3-way interactions (full model)
+bayes_NxTxS <- loo(bayes_NxTxS_descae3, k_threshold = 0.7)
+
+# Compare all models
+compare_models(loo_N, loo_T, loo_S,
+               loo_N_NxT, loo_N_NxS, loo_N_SxT,
+               loo_T_NxT, loo_T_NxS, loo_T_SxT,
+               loo_S_NxT, loo_S_NxS, loo_S_SxT,
+               loo_NT, loo_TS, loo_NS,
+               loo_NxT, loo_TxS, loo_NxS,
+               loo_NTS,
+               loo_NTS_NxT, loo_NTS_NxS, loo_NTS_TxS,
+               loo_NTS_NxT_NxS, loo_NTS_NxT_TxS, loo_NTS_NxS_TxS,
+               loo_NTS_NxT_NxS_TxS,
+               bayes_NxTxS)
+```
+
+# Model 2: All species in 2007
+
+#### Single factor models (Model 2)
+
+Species is included as a random effect
+
+```{r model2_single-factor}
+# Single factor models
+start_time <- Sys.time()
+bayes2_N <- stan_glmer(FFD_s ~ N + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_T <- stan_glmer(FFD_s ~ Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_S <- stan_glmer(FFD_s ~ Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_singlefactor_time <- end_time - start_time
+model2_singlefactor_time
+```
+
+### Single factor models with one 2-way interaction (Model 2)
+```{r model2_single-factor-with-one-2way-interaction, eval = FALSE}
+
+start_time <- Sys.time()
+# Nitrogen as the single factor
+bayes2_N_NxT <- stan_glmer(FFD_s ~ N + N:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_N_NxS <- stan_glmer(FFD_s ~ N + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_N_TxS <- stan_glmer(FFD_s ~ N + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+# Temp as the single factor
+bayes2_T_NxT <- stan_glmer(FFD_s ~ Temp + N:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_T_NxS <- stan_glmer(FFD_s ~ Temp + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_T_TxS <- stan_glmer(FFD_s ~ Temp + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+# Snow as the single factor
+bayes2_S_NxT <- stan_glmer(FFD_s ~ Snow + N:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_S_NxS <- stan_glmer(FFD_s ~ Snow + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_S_TxS <- stan_glmer(FFD_s ~ Snow + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_single_with_one_2way_time <- end_time - start_time
+model2_single_with_one_2way_time
+```
+
+### Single factor models with two 2-way interactions (Model 2)
+```{r model2_single-factor-with-two-2way-interactions, eval=FALSE}
+start_time <- Sys.time()
+# Nitrogen as the single factor
+bayes2_N_NxT_NxS <- stan_glmer(FFD_s ~ N + N:Temp + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_N_NxT_TxS <- stan_glmer(FFD_s ~ N + N:Temp + Temp:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_N_NxS_TxS <- stan_glmer(FFD_s ~ N + N:Snow + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+# Temp as the single factor
+bayes2_T_NxT_NxS <- stan_glmer(FFD_s ~ Temp + N:Temp + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_T_NxT_TxS <- stan_glmer(FFD_s ~ Temp + N:Temp + Temp:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_T_NxS_TxS <- stan_glmer(FFD_s ~ Temp + N:Snow + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+
+# Snow as the single factor
+bayes2_S_NxT_NxS <- stan_glmer(FFD_s ~ N + N:Temp + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_S_NxT_TxS <- stan_glmer(FFD_s ~ N + N:Temp + Temp:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99)
+
+bayes2_S_NxS_TxS <- stan_glmer(FFD_s ~ N + N:Snow + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+end_time <- Sys.time()
+model2_single_with_two_2way_time <- end_time - start_time
+model2_single_with_two_2way_time 
+```
+
+
+### Two factor models - no interactions (Model 2)
+
+```{r model2_two-factor-with-no-interactions}
+start_time <- Sys.time()
+#' Two factor models
+bayes2_NT <- stan_glmer(FFD_s ~ N + Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+bayes2_NS <- stan_glmer(FFD_s ~ N + Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+bayes2_TS <- stan_glmer(FFD_s ~ Temp + Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.99999)
+end_time <- Sys.time()
+model2_twofactor_time <- end_time - start_time
+model2_twofactor_time
+```
+
+### Two factor models WITH interactions (Model 2)
+
+```{r model2_two-factor-with-2way-interaction}
+start_time <- Sys.time()
+# Two factor models
+bayes2_NxT <- stan_glmer(FFD_s ~ N*Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_NxS <- stan_glmer(FFD_s ~ N*Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_TxS <- stan_glmer(FFD_s ~ Temp*Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian, 
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_twofactor_interaction <- end_time - start_time
+model2_twofactor_interaction
+```
+
+### Three factor models - no interactions (Model 2)
+```{r model2_three-factor-with-no-interactions}
+start_time <- Sys.time()
+# Three-way model: N, Temp, Snow
+bayes2_NTS <- stan_glmer(FFD_s ~ N + Temp + Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_threefactor_time <- end_time - start_time
+model2_threefactor_time
+```
+
+### Three factor models WITH one 2-way interactions (Model 2)
+```{r model2_three-factor-with-one-2way-interaction}
+start_time <- Sys.time()
+bayes2_NTS_NxT <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_NTS_NxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_NTS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_threefactor_one2wayinteraction_time <- end_time - start_time
+model2_threefactor_one2wayinteraction_time
+```
+
+### Three factor model with two 2-way interactions (Model 2)
+```{r model2_three-factor-with-two-2way-interactions}
+start_time <- Sys.time()
+bayes2_NTS_NxT_NxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_NTS_NxT_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + Snow:Temp + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+
+bayes2_NTS_NxS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N: Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_threefactor_two2wayinteractions_time <- end_time - start_time
+model2_threefactor_two2wayinteractions_time
+```
+
+### Three factor model with three 2-way interactions (Model 2)
+```{r model2_three-factor-with-three-2way-interactions}
+start_time <- Sys.time()
+bayes2_NTS_NxT_NxS_TxS <- stan_glmer(FFD_s ~ N + Temp + Snow + N:Temp + N:Snow + Temp:Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+end_time <- Sys.time()
+model2_threefactor_three2wayinteractions_time <- end_time - start_time
+model2_threefactor_three2wayinteractions_time
+```
+
+### Full model with all 3 factors, 2-way interactions, and 3-way interaction (Model 2)
+```{r}
+bayes2_NxTxS_descae3 <- stan_glmer(FFD_s ~ N*Temp*Snow + (1|Block / Subblock) + (1 | Species), 
+                     family = gaussian,
+                     data = nwt_ffd2_2007,
+                     adapt_delta = 0.999)
+```
+
+## Compare all variations of Model 2
+```{r model2_model_comparison_looic, eval = TRUE}
+# Single factor (no interactions)
+loo2_N <- loo(bayes2_N, k_threshold = 0.7)
+loo2_T <- loo(bayes2_T, k_threshold = 0.7)
+loo2_S <- loo(bayes2_S, k_threshold = 0.7)
+# compare_models(loo2_N, loo2_T, loo2_S)
+
+# Single factor with one 2-way interaction
+# loo2_N_NxT <- loo(bayes2_N_NxT, k_threshold = 0.7)
+# loo2_N_NxS <- loo(bayes2_N_NxS, k_threshold = 0.7)
+# loo2_N_SxT <- loo(bayes2_N_TxS, k_threshold = 0.7)
+# loo2_T_NxT <- loo(bayes2_T_NxT, k_threshold = 0.7)
+# loo2_T_NxS <- loo(bayes2_T_NxS, k_threshold = 0.7)
+# loo2_T_SxT <- loo(bayes2_T_TxS, k_threshold = 0.7)
+# loo2_S_NxT <- loo(bayes2_S_NxT, k_threshold = 0.7)
+# loo2_S_NxS <- loo(bayes2_S_NxS, k_threshold = 0.7)
+# loo2_S_SxT <- loo(bayes2_S_TxS, k_threshold = 0.7)
+# compare_models(loo2_N_NxT, loo2_N_NxS, loo2_N_SxT,
+#                loo2_T_NxT, loo2_T_NxS, loo2_T_SxT,
+#                loo2_S_NxT, loo2_S_NxS, loo2_S_SxT)
+# 
+# Two factor (no interactions)
+loo2_NT <- loo(bayes2_NT, k_threshold = 0.7)
+loo2_TS <- loo(bayes2_TS, k_threshold = 0.7)
+loo2_NS <- loo(bayes2_NS, k_threshold = 0.7)
+# compare_models(loo2_NT, loo2_TS, loo2_NS)
+# 
+# Two factor with one 2-way interaction
+loo2_NxT <- loo(bayes2_NxT, k_threshold = 0.7)
+loo2_TxS <- loo(bayes2_TxS, k_threshold = 0.7)
+loo2_NxS <- loo(bayes2_NxS, k_threshold = 0.7)
+# compare_models(loo2_NxT, loo2_TxS, loo2_NxS)
+# 
+# # Three factor with no interaction
+loo2_NTS <- loo(bayes2_NTS, k_threshold = 0.7)
+# 
+# # Three factor with one 2-way interaction
+loo2_NTS_NxT <- loo(bayes2_NTS_NxT, k_threshold = 0.7)
+loo2_NTS_NxS <- loo(bayes2_NTS_NxS, k_threshold = 0.7)
+loo2_NTS_TxS <- loo(bayes2_NTS_TxS, k_threshold = 0.7)
+# # compare_models(loo2_NTS_NxT, loo2_NTS_NxS, loo2_NTS_TxS)
+# 
+# # Three factor with two 2-way interactions
+# loo2_NTS_NxT_NxS <- loo(bayes2_NTS_NxT_NxS, k_threshold = 0.7)
+# loo2_NTS_NxT_TxS <- loo(bayes2_NTS_NxT_TxS, k_threshold = 0.7)
+# loo2_NTS_NxS_TxS <- loo(bayes2_NTS_NxS_TxS, k_threshold = 0.7)
+# # compare_models(loo2_NTS_NxT_NxS, loo2_NTS_NxT_TxS, loo2_NTS_NxS_TxS)
+# 
+# # Three factor with one 3-way interaction
+# loo2_NTS_NxT_NxS_TxS <- loo(bayes2_NTS_NxT_NxS_TxS, k_threshold = 0.7)
+# 
+# # Three factor with all 2-way and 3-way interactions (full model)
+# bayes2_NxTxS <- loo(bayes2_NxTxS_descae3, k_threshold = 0.7)
+# 
+# # Compare all models for model 2
+compare_models(loo2_N, loo2_T, loo2_S,
+               # loo2_N_NxT, loo2_N_NxS, loo2_N_SxT,
+               # loo2_T_NxT, loo2_T_NxS, loo2_T_SxT,
+               # loo2_S_NxT, loo2_S_NxS, loo2_S_SxT,
+               loo2_NT, loo2_TS, loo2_NS,
+               loo2_NxT, loo2_TxS, loo2_NxS,
+               # loo2_NTS,
+               loo2_NTS_NxT, loo2_NTS_NxS, loo2_NTS_TxS
+               # loo2_NTS_NxT_NxS, loo2_NTS_NxT_TxS, loo2_NTS_NxS_TxS,
+               # loo2_NTS_NxT_NxS_TxS,
+               # bayes2_NxTxS
+)
+```
+
+# Model 3: Deschampsia in 2007 (FFD not centered)
+
+#### Single factor models (Model 3)
+
+```{r model3_singlefactor}
+# Single factor models --> Still struggling with divergence, even with large "adapt_delta" values
+
+#
+bayes3_N <- stan_glmer(FFD ~ N + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999999)
+
+#
+bayes3_T <- stan_glmer(FFD ~ Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+
+#
+bayes3_S <- stan_glmer(FFD ~ Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+
+```
+
+### Two factor models - no interactions (Model 3)
+
+```{r model3_two-factor-with-no-interactions}
+# Two factor models
+
+# converged
+bayes3_NT <- stan_glmer(FFD ~ N + Temp + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999)
+# converged
+bayes3_NS <- stan_glmer(FFD ~ N + Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999)
+# converged
+bayes3_TS <- stan_glmer(FFD ~ Temp + Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999)
+
+```
+
+### Two factor models WITH interactions (Model 3)
+
+```{r model3_two-factor-with-2way-interaction}
+# Two factor models
+
+# converged!
+bayes3_NxT <- stan_glmer(FFD ~ N*Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+summary(bayes3_NxT,probs=c(0.025,0.975),digits=2)
+
+# converged!
+bayes3_NxS <- stan_glmer(FFD ~ N*Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999999)
+
+# converged (with 3 chains instead of default of 4)
+bayes3_TxS <- stan_glmer(FFD ~ Temp*Snow + (1|Block / Subblock), 
+                     family = gaussian, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999999999,
+                     chains = 3)
+
+
+```
+
+### Three factor models - no interactions (Model 3)
+```{r model3_three-factor-with-no-interactions}
+# Three-way model: N, Temp, Snow
+
+# converged!
+bayes3_NTS <- stan_glmer(FFD ~ N + Temp + Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+```
+
+### Three factor models WITH one 2-way interactions (Model 3)
+```{r model3_three-factor-with-one-2way-interaction}
+# converged!
+bayes3_NTS_NxT <- stan_glmer(FFD ~ N + Temp + Snow + N:Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+# converged!
+bayes3_NTS_NxS <- stan_glmer(FFD ~ N + Temp + Snow + N:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999999999)
+
+# converged!
+bayes3_NTS_TxS <- stan_glmer(FFD ~ N + Temp + Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999999)
+
+```
+
+### Three factor model with two 2-way interactions (Model 3)
+```{r model3_three-factor-with-two-2way-interactions}
+# converged!
+bayes3_NTS_NxT_NxS <- stan_glmer(FFD ~ N + Temp + Snow + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+# converged!
+bayes3_NTS_NxT_TxS <- stan_glmer(FFD ~ N + Temp + Snow + N:Temp + Snow:Temp + (1|Block / Subblock),
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999999)
+
+# converged!
+bayes3_NTS_NxS_TxS <- stan_glmer(FFD ~ N + Temp + Snow + N:Temp + N: Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999)
+```
+
+### Three factor model with three 2-way interactions (Model 3)
+```{r model3_three-factor-with-three-2way-interactions}
+# converged!
+bayes3_NTS_NxT_NxS_TxS <- stan_glmer(FFD ~ N + Temp + Snow + N:Temp + N:Snow + Temp:Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+```
+
+### Three factor model with all interactions (Model 3)
+```{r model3_three-factor-with-all-interactions}
+# converged!
+bayes3_NxTxS <- stan_glmer(FFD ~ N*Temp*Snow + (1|Block / Subblock), 
+                     family = gaussian,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999)
+```
+
+## Compare all variations of Model 3
+```{r model3_model_comparison_looic, eval = FALSE}
+start_time <- Sys.time()
+# Single factor (no interactions)
+loo3_N <- loo(bayes3_N, k_threshold = 0.7)
+loo3_T <- loo(bayes3_T, k_threshold = 0.7)
+loo3_S <- loo(bayes3_S, k_threshold = 0.7)
+# compare_models(loo3_N, loo3_T, loo3_S)
+
+# Two factor (no interactions)
+loo3_NT <- loo(bayes3_NT, k_threshold = 0.7)
+loo3_TS <- loo(bayes3_TS, k_threshold = 0.7)
+loo3_NS <- loo(bayes3_NS, k_threshold = 0.7)
+# compare_models(loo3_NT, loo3_TS, loo3_NS)
+
+# Two factor with one 2-way interaction
+loo3_NxT <- loo(bayes3_NxT, k_threshold = 0.7)
+loo3_TxS <- loo(bayes3_TxS, k_threshold = 0.7)
+loo3_NxS <- loo(bayes3_NxS, k_threshold = 0.7)
+# compare_models(loo3_NxT, loo3_TxS, loo3_NxS)
+
+# Three factor with no interaction
+loo3_NTS <- loo(bayes3_NTS, k_threshold = 0.7)
+
+# Three factor with one 2-way interaction
+loo3_NTS_NxT <- loo(bayes3_NTS_NxT, k_threshold = 0.7)
+loo3_NTS_NxS <- loo(bayes3_NTS_NxS, k_threshold = 0.7)
+loo3_NTS_TxS <- loo(bayes3_NTS_TxS, k_threshold = 0.7)
+# compare_models(loo3_NTS_NxT, loo3_NTS_NxS, loo3_NTS_TxS)
+
+# Three factor with two 2-way interactions
+loo3_NTS_NxT_NxS <- loo(bayes3_NTS_NxT_NxS, k_threshold = 0.7)
+loo3_NTS_NxT_TxS <- loo(bayes3_NTS_NxT_TxS, k_threshold = 0.7)
+loo3_NTS_NxS_TxS <- loo(bayes3_NTS_NxS_TxS, k_threshold = 0.7)
+# compare_models(loo3_NTS_NxT_NxS, loo3_NTS_NxT_TxS, loo3_NTS_NxS_TxS)
+
+# Three factor with one 3-way interaction
+loo3_NTS_NxT_NxS_TxS <- loo(bayes3_NTS_NxT_NxS_TxS, k_threshold = 0.7)
+
+# Three factor with all 2-way and 3-way interactions (full model)
+bayes3_NxTxS <- loo(bayes3_NxTxS, k_threshold = 0.7)
+
+# Compare all models
+compare_models(loo3_N, loo3_T, loo3_S,
+               loo3_NT, loo3_TS, loo3_NS,
+               loo3_NxT, loo3_TxS, loo3_NxS,
+               loo3_NTS,
+               loo3_NTS_NxT, loo3_NTS_NxS, loo3_NTS_TxS,
+               loo3_NTS_NxT_NxS, loo3_NTS_NxT_TxS, loo3_NTS_NxS_TxS,
+               loo3_NTS_NxT_NxS_TxS,
+               bayes3_NxTxS)
+end_time <- Sys.time()
+model3_looic_time <- end_time - start_time
+```
+
+![Model 3 comparisons](figures/model3_looic_results.png)
+
+# Model 4: Visit
+
+#### Single factor models (Model 4)
+
+```{r model4_singlefactor}
+# Single factor models --> Still struggling with divergence, even with large "adapt_delta" values
+
+#
+bayes4_N <- stan_glmer(Visit ~ N + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999999)
+
+#
+bayes4_T <- stan_glmer(Visit ~ Temp + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+
+#
+bayes4_S <- stan_glmer(Visit ~ Snow + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+
+```
+
+### Two factor models - no interactions (Model 4)
+
+```{r model4_two-factor-with-no-interactions}
+# Two factor models
+
+# 
+bayes4_NT <- stan_glmer(Visit ~ N + Temp + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999)
+# 
+bayes4_NS <- stan_glmer(Visit ~ N + Snow + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999)
+# 
+bayes4_TS <- stan_glmer(Visit ~ Temp + Snow + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999)
+
+```
+
+### Two factor models WITH interactions (Model 4)
+
+```{r model4_two-factor-with-2way-interaction}
+# Two factor models
+
+# !
+bayes4_NxT <- stan_glmer(Visit ~ N*Temp + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+summary(bayes4_NxT,probs=c(0.025,0.975),digits=2)
+
+# !
+bayes4_NxS <- stan_glmer(Visit ~ N*Snow + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999999)
+
+#  (with 3 chains instead of default of 4)
+bayes4_TxS <- stan_glmer(Visit ~ Temp*Snow + (1|Block / Subblock), 
+                     family = poisson, 
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999999999,
+                     chains = 3)
+
+
+```
+
+### Three factor models - no interactions (Model 4)
+```{r model4_three-factor-with-no-interactions}
+# Three-way model: N, Temp, Snow
+
+# !
+bayes4_NTS <- stan_glmer(Visit ~ N + Temp + Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+```
+
+### Three factor models WITH one 2-way interactions (Model 4)
+```{r model4_three-factor-with-one-2way-interaction}
+# 
+bayes4_NTS_NxT <- stan_glmer(Visit ~ N + Temp + Snow + N:Temp + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999)
+
+# 
+bayes4_NTS_NxS <- stan_glmer(Visit ~ N + Temp + Snow + N:Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.9999999999999)
+
+# 
+bayes4_NTS_TxS <- stan_glmer(Visit ~ N + Temp + Snow + Snow:Temp + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999999)
+
+```
+
+### Three factor model with two 2-way interactions (Model 4)
+```{r model4_three-factor-with-two-2way-interactions}
+# 
+bayes4_NTS_NxT_NxS <- stan_glmer(Visit ~ N + Temp + Snow + N:Temp + N:Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999)
+
+# 
+bayes4_NTS_NxT_TxS <- stan_glmer(Visit ~ N + Temp + Snow + N:Temp + Snow:Temp + (1|Block / Subblock),
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999999)
+
+# 
+bayes4_NTS_NxS_TxS <- stan_glmer(Visit ~ N + Temp + Snow + N:Temp + N: Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.999999999)
+```
+
+### Three factor model with three 2-way interactions (Model 4)
+```{r model4_three-factor-with-three-2way-interactions}
+# 
+bayes4_NTS_NxT_NxS_TxS <- stan_glmer(Visit ~ N + Temp + Snow + N:Temp + N:Snow + Temp:Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999999)
+```
+
+### Three factor model with all interactions (Model 4)
+```{r model4_three-factor-with-all-interactions}
+# 
+bayes4_NxTxS <- stan_glmer(Visit ~ N*Temp*Snow + (1|Block / Subblock), 
+                     family = poisson,
+                     data = nwt_descae_2007,
+                     adapt_delta = 0.99999999)
+```
+
+## Compare all variations of Model 4
+```{r model4_model_comparison_looic, eval = FALSE}
+start_time <- Sys.time()
+# Single factor (no interactions)
+loo4_N <- loo(bayes4_N, k_threshold = 0.7)
+loo4_T <- loo(bayes4_T, k_threshold = 0.7)
+loo4_S <- loo(bayes4_S, k_threshold = 0.7)
+# compare_models(loo4_N, loo4_T, loo4_S)
+
+# Two factor (no interactions)
+loo4_NT <- loo(bayes4_NT, k_threshold = 0.7)
+loo4_TS <- loo(bayes4_TS, k_threshold = 0.7)
+loo4_NS <- loo(bayes4_NS, k_threshold = 0.7)
+# compare_models(loo4_NT, loo4_TS, loo4_NS)
+
+# Two factor with one 2-way interaction
+loo4_NxT <- loo(bayes4_NxT, k_threshold = 0.7)
+loo4_TxS <- loo(bayes4_TxS, k_threshold = 0.7)
+loo4_NxS <- loo(bayes4_NxS, k_threshold = 0.7)
+# compare_models(loo4_NxT, loo4_TxS, loo4_NxS)
+
+# Three factor with no interaction
+loo4_NTS <- loo(bayes4_NTS, k_threshold = 0.7)
+
+# Three factor with one 2-way interaction
+loo4_NTS_NxT <- loo(bayes4_NTS_NxT, k_threshold = 0.7)
+loo4_NTS_NxS <- loo(bayes4_NTS_NxS, k_threshold = 0.7)
+loo4_NTS_TxS <- loo(bayes4_NTS_TxS, k_threshold = 0.7)
+# compare_models(loo4_NTS_NxT, loo4_NTS_NxS, loo4_NTS_TxS)
+
+# Three factor with two 2-way interactions
+loo4_NTS_NxT_NxS <- loo(bayes4_NTS_NxT_NxS, k_threshold = 0.7)
+loo4_NTS_NxT_TxS <- loo(bayes4_NTS_NxT_TxS, k_threshold = 0.7)
+loo4_NTS_NxS_TxS <- loo(bayes4_NTS_NxS_TxS, k_threshold = 0.7)
+# compare_models(loo4_NTS_NxT_NxS, loo4_NTS_NxT_TxS, loo4_NTS_NxS_TxS)
+
+# Three factor with one 3-way interaction
+loo4_NTS_NxT_NxS_TxS <- loo(bayes4_NTS_NxT_NxS_TxS, k_threshold = 0.7)
+
+# Three factor with all 2-way and 3-way interactions (full model)
+bayes4_NxTxS <- loo(bayes4_NxTxS, k_threshold = 0.7)
+
+# Compare all models
+compare_models(loo4_N, loo4_T, loo4_S,
+               loo4_NT, loo4_TS, loo4_NS,
+               loo4_NxT, loo4_TxS, loo4_NxS,
+               loo4_NTS,
+               loo4_NTS_NxT, loo4_NTS_NxS, loo4_NTS_TxS,
+               loo4_NTS_NxT_NxS, loo4_NTS_NxT_TxS, loo4_NTS_NxS_TxS,
+               loo4_NTS_NxT_NxS_TxS,
+               bayes4_NxTxS)
+end_time <- Sys.time()
+model4_looic_time <- end_time - start_time
+```

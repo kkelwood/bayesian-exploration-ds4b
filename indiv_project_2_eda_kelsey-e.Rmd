@@ -1,0 +1,282 @@
+---
+title: "Niwot FFD"
+author: "Kelsey Elwood"
+date: "10/29/2018"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+The data I am using for the individual project looks at the first flowering date (FFD) of various alpine species in response to increases in temperature, snowpack, and N. Data was collected for 2007 and 2008, though for now I am only looking at 2008 data. The data is structured with three blocks of 16 plots each. In each block, a snowfence bisects the block to form sub-blocks, with half of the plots on the windward (normal to reduced snowpack) and half of the plots on the leeward (increased snowpack) side of the fence. In each sub-block, 2 plots have warming treatments, 2 plots have increased nitrogen, 2 plots have both warming and increased nitrogen, and 2 plots are left as controls. Figure 1 captures the conceptual layout of the plots.
+
+![Figure 1](figures/indiv-proj-method-schematic_kelsey-e.png)
+*__Figure 1.__ The experimental design shows all 48 plots divided into blocks and sub-blocks. Each plot within a sub-block is 1 meter apart. The blocks are approximately 50 meters apart.*
+
+Effectively, there are 2 replicates in 3 blocks for a total of 6 plots with a similar combination of warming, nitrogen, and snow. I will refer to the combination types using the plot "Code", which can is defined in Table 1.
+
+*__Table 1.__ Plot codes and corresponding manipulations of snow, nitrogen, and temperature.*
+
+| Code | Snow | Nitrogen | Temperature |    
+| ---- | ---- | ----------- | -------- |    
+| PNW | Increased | Increased | Warmer |    
+| PNX | Increased | Increased | ------ |    
+| PXW | Increased | --------- | Warmer |    
+| PXX | Increased | --------- | ------ |    
+| XNW | Decreased | Increased | Warmer |    
+| XNX | Decreased | Increased | ------ |    
+| XXW | Decreased | --------- | Warmer |    
+| XXX | Decreased | --------- | ------ |    
+
+
+The following code works step-by-step through some exploratory data analysis (EDA):
+
+## 1. Load libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(tidyr)
+library(knitr)
+```
+
+## 2. Load & clean data
+
+```{r}
+nwt_ffd <- read.csv(file = "data/NWT_ITEX_FFD_data_2007-8.csv", na.strings = ".") %>% 
+    # only look at year 2008 (not 2007): 
+    filter(year ==  "2008") %>% 
+    # rename the values to be more true to their meaning:
+    mutate(Snow = as.factor(ifelse(Snow == "X", "Reduced_Snowpack", "Increased_Snowpack"))) %>%
+    mutate(Temp = as.factor(ifelse(Temp == "X", "Ambient_Temp", "Warmer_Temp"))) %>%
+    mutate(N = as.factor(ifelse(N == "X", "Ambient_N", "Increased_N"))) %>% 
+    # remove 2 unnecessary (and empty) columns
+    select(-c("X", "X.1")) 
+    
+```
+
+## 3. Tidy data 
+```{r}
+# convert from data frame to tibble
+nwt_ffd_tib <- as_data_frame(nwt_ffd)
+class(nwt_ffd_tib)
+str(nwt_ffd_tib)
+
+```
+
+## 4. Explore predictor variables (i.e. "Code", "Snow", "Temp", "N") 
+```{r}
+# Check for unique values
+unique(nwt_ffd_tib$Code)
+unique(nwt_ffd_tib$Snow)
+unique(nwt_ffd_tib$Temp)
+unique(nwt_ffd_tib$N)
+
+```
+
+
+## 5. Explore response variables 
+
+Although my data has the first flowering date (FFD) of many species, I'm going to start by focusing on only one (*Geum rossii*, a.k.a. "ACOROS"). 
+
+```{r}
+ACOROS_FFD <- nwt_ffd_tib$ACOROS
+summary(ACOROS_FFD)
+
+```
+
+_Summarize FFD for plot types_
+```{r}
+# Summary statistics
+nwt_ffd_summary <-
+    nwt_ffd_tib %>%
+    group_by(Code) %>%
+    summarize(mean=mean(ACOROS, na.rm = TRUE),
+              sd=sd(ACOROS, na.rm = TRUE),
+              min=min(ACOROS, na.rm = TRUE),
+              max=max(ACOROS, na.rm = TRUE)) %>% 
+    mutate(se = sd/sqrt(length(sd)))
+```
+
+```{r}
+# Create normal fitted
+norm_df <- NULL
+for ( i in 1:8 ) {
+    x <- seq(nwt_ffd_summary$min[i],nwt_ffd_summary$max[i],length.out = 100)
+    y <- dnorm(x, nwt_ffd_summary$mean[i], nwt_ffd_summary$sd[i])
+    norm_df <- rbind(norm_df,data.frame(x,y,Code=nwt_ffd_summary$Code[i]))
+}
+rm(x,y) #clean up
+summary(norm_df)
+norm_df <- arrange(norm_df, x)
+plot(norm_df$x, norm_df$y)
+```
+
+
+```{r}
+ggplot() +
+    geom_histogram(data = nwt_ffd_tib, mapping = aes(x = ACOROS, y = stat(density)), binwidth = 4) + 
+    geom_density(data = nwt_ffd_tib, mapping = aes(x = ACOROS), col = "darkblue") +
+    labs(title = "Figure 2",
+         x = "FFD of Geum rossii")
+
+```
+*__Figure 2.__ A histogram of FFD across all plots.*
+
+
+```{r}
+p3 <- ggplot(data = nwt_ffd_tib) +
+    geom_histogram(mapping = aes(x = ACOROS, y = stat(density), fill = Snow,), position = "identity", alpha = 0.5, na.rm = TRUE, binwidth = 3) + 
+    geom_density(mapping = aes(x = ACOROS, col = Snow)) +
+    facet_grid(N ~ Temp) +
+    ggtitle("Figure 3.1") + 
+    labs(title = "Figure 3.", 
+         subtitle = "FFD as a function of Snowpack, Temperature, and Nitrogen",
+         x = "FFD of Geum rossii")
+
+p3
+
+```
+*__Figure 3__ A density histogram of FFD as a function of Snowpack, Temperature, and Nitrogen with a density smoother overlaid.*
+
+
+Let's look at the data a few more ways...
+
+```{r}
+p4 <- ggplot(data = nwt_ffd_tib) +
+    geom_histogram(mapping = aes(x = ACOROS, y = stat(density), fill = Code), position = "identity", alpha = 0.5, na.rm = TRUE, binwidth = 4, stat = "density") + 
+    ggtitle("Figure 3") + 
+    labs(title = "Figure 4", 
+         subtitle = "FFD of all 8 types of plots",
+         x = "FFD of Geum rossii")
+
+p4
+
+```
+*__Figure 4__ A density plot of FFD in each of the 8 different types of plots (combinations of snow, nitrogen, and temperature).*
+
+```{r}
+p5 <- ggplot(data = nwt_ffd_tib, aes(Code, ACOROS, fill = Code, col = Code)) +
+  stat_summary(geom = "point", fun.y = mean, position = "dodge") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = "dodge") + 
+    labs(title = "Figure 5",
+         subtitle = "First flowering data of each plot type",
+         x = "Plot code",
+         y = "First flowering date of Geum rossii") +
+    scale_y_discrete(limits = c(180:190))
+p5
+```
+*__Figure 5.__ Mean and SE of FFD for all plot types.*
+
+```{r}
+# Summary statistics for Snow
+nwt_ffd_snow_summary <-
+    nwt_ffd_tib %>%
+    group_by(Snow) %>% 
+    summarize(mean=mean(ACOROS, na.rm = TRUE),
+              sd=sd(ACOROS, na.rm = TRUE),
+              min=min(ACOROS, na.rm = TRUE),
+              max=max(ACOROS, na.rm = TRUE))
+nwt_ffd_snow_summary
+
+# Summary statistics for Temp
+nwt_ffd_temp_summary <-
+    nwt_ffd_tib %>%
+    group_by(Temp) %>% 
+    summarize(mean=mean(ACOROS, na.rm = TRUE),
+              sd=sd(ACOROS, na.rm = TRUE),
+              min=min(ACOROS, na.rm = TRUE),
+              max=max(ACOROS, na.rm = TRUE))
+nwt_ffd_temp_summary
+
+# Summary statistics for N
+nwt_ffd_n_summary <-
+    nwt_ffd_tib %>%
+    group_by(N) %>% 
+    summarize(mean=mean(ACOROS, na.rm = TRUE),
+              sd=sd(ACOROS, na.rm = TRUE),
+              min=min(ACOROS, na.rm = TRUE),
+              max=max(ACOROS, na.rm = TRUE))
+nwt_ffd_n_summary
+
+```
+
+
+```{r}
+# Violin plot of FFD as a function of Snow alone
+ggplot(data = nwt_ffd_tib) +
+  geom_violin(mapping = aes(y= as.numeric(ACOROS), x = Snow, fill = Snow))
+
+# Violin plot of FFD as a function of Temp alone
+ggplot(data = nwt_ffd_tib) +
+  geom_violin(mapping = aes(y= as.numeric(ACOROS), x = Temp, fill = Temp))
+
+# Violin plot of FFD as a function of N alone
+ggplot(data = nwt_ffd_tib) +
+  geom_violin(mapping = aes(y= as.numeric(ACOROS), x = N, fill = N))
+
+```
+
+
+## Notes from class
+_Think about sample or experimental unit._ In my case, plot is the experimental unit. Plots have either increased or ambient temp and increased or ambient N. The plots are within snow subblocks, within 3 blocks.   
+_Create a sample size versus mean and se value plot (like in radon)._
+Not relevant here because the sample size is designed to be consistent. However, it is worthwhile to review the species compositions and check when there is missing data (e.g. ACOROS did not flower in plot 39, 40, 45, 46) --> Conclusion: DESCAE only missing from 1 and therefore may be a better study system? ACOROS = 4 NAs, CALLEP = 8 NA's. Those were the only species that flowered in more than 75% of the plots. 
+```{r}
+number_nas_df <- data.frame(ncol = 2, nrow = length(8:35))
+colnames(number_nas_df) <- c("Species", "NA_count")
+for(i in 8:35) {
+    number_nas <- sum(is.na(nwt_ffd_tib[i]))
+    rowname <- colnames(nwt_ffd_tib[i])
+    number_nas_df[(i-7),1] <- rowname
+    number_nas_df[(i-7),2] <- number_nas
+}
+class(number_nas_df$NA_count)
+arrange(number_nas_df, NA_count)
+```
+
+_Think about the lmer() function from radon (partial pooling):_     
+house-level model: y_i ~ N(mu_j[i], sigma^2) --> mu_j[i] translates to... for a particular house (i), the mean depends on what county (j) you are in. Another way... the county j where house i is located.
+When understanding the output from radon, the "Residual" random effect represents the variance among houses. For example, when the output says that the county variance is 0.1 and the residual variance is 0.6, that means there is 6x more variance among houses in the county than among counties. But beware, it is still possible that the variance could still be driven by county-level differences.
+mu = the county mean radon level    
+county-level model: mu_j ~ N(mu, sigma^2)
+
+
+# Exploration with other (all?) species
+
+```{r}
+# To do this, we first need to convert the data frame to have a column for "species" and a column for "FFD"
+species_list <- colnames(nwt_ffd_tib[,8:35])
+nwt_ffd_tib2 <- nwt_ffd_tib %>% 
+    gather(species_list, key = "Species", value = "FFD")
+```
+
+```{r}
+# Summary statistics
+nwt_ffd_summary_all <-
+    nwt_ffd_tib2 %>%
+    group_by(Code) %>% 
+    summarize(mean=mean(FFD, na.rm = TRUE),
+              sd=sd(FFD, na.rm = TRUE),
+              min=min(FFD, na.rm = TRUE),
+              max=max(FFD, na.rm = TRUE)) %>% 
+    mutate(se = sd/sqrt(length(sd)))
+nwt_ffd_summary_all
+```
+
+```{r}
+p6 <- nwt_ffd_tib2 %>%
+    group_by(Species) %>% 
+    drop_na() %>% 
+    ggplot(aes(Code, FFD, fill = Code, col = Code)) +
+  stat_summary(geom = "point", fun.y = mean, position = "dodge") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = "dodge") + 
+    facet_wrap(~ Species) + 
+    labs(title = "Figure 6",
+         subtitle = "First flowering date of each species of each plot type",
+         x = "Plot code",
+         y = "First flowering date")
+p6
+```
+*__Figure 6.__ The 5 species with multiple observations across the plots are represented hear with the mean and SE of the first flowering date.*

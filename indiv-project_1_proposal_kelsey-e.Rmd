@@ -1,0 +1,41 @@
+---
+title: "Drivers of alpine plant phenology: A reanalysis of Smith et al. (2012)"
+author: "Kelsey Elwood"
+date: "10/21/2018"
+output: rmarkdown::github_document
+bibliography: indiv-project.bib
+csl: journal-of-vegetation-science.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+Understanding how biotic systems will respond to anthropogenic change is one of the pressing scientific pursuits of the 21st century [@Walther2002]. Increased temperatures, higher rates of nitrogen deposition, and changes in precipitation regimes are some of the ways that humans have impacted the environment, even in remote regions. Plant phenology, the study of timing of biological events, has been shown to be particularly responsive to environmental variation [@Sparks2002]. 
+
+In 2012, Smith et al. published a paper analyzing whether increased nitrogen, increased growing season temperatures, increased winter snowpack, or some combination of these variables would effect the first flowering date of alpine plant species. The authors used data from alpine meadows on Niwot Ridge, a long-term ecological research site near Ward, Colorado. The authors found that forbs (*Geum rossii* and _Bistorta bistortoides_) flowered earlier with warming and later with increased snowpack and increased nitrogen. Interestingly, the combination of increased snow and increased N led to no change in forb phenology. A dominant graminoid, *Deschampsia caespitosa*, flowered marginally earlier with warming and with increased N (Figure 1). 
+
+![Figure 1.](figures/fig1_Smith&al2012.png)
+__Figure 1.__ *Results from Smith et al. [-@Smith2012] show the difference in first flowering date between the treatments and the control. Values on the y-axis represent days, with positive values representing later flowering than the control plots. All possible combinations of the treatments are presented here with +S representing increased snow, +T representing increased temperature, and +N representing increased nitrogen.*
+
+
+# Reanalysis with a multi-level model
+
+The purpose of the proposed project is to reanalyze the research published by Smith et. al [-@Smith2012] using a multi-level model. The original work was analyzed using ANOVA (see Figure 1), but the experimental design could also be analyzed with a multi-level model. The data is structured with three blocks of 16 plot each. In each block, a snowfence bisects the block to form sub-blocks, with half of the plots on the windward (normal to reduced snowpack) and half of the plots on the leeward (increased snowpack) side of the fence. In each sub-block, 2 plots have warming treatments, 2 plots have increased nitrogen, 2 plots have both warming and increased nitrogen, and 2 plots are left as controls. Figure 2 captures the conceptual layout of the plots.
+
+
+![Figure 2](figures/indiv-proj-method-schematic_kelsey-e.png)
+__Figure 2.__ *The experimental design shows all 48 plots divided into blocks and sub-blocks. Each plot within a sub-block is 1 meter apart. The blocks are approximately 50 meters apart.*
+
+
+In the original ANOVA analysis, the authors treated treatment and block as fixed effects and the interaction between snow and block as a random effect. For the reanalysis using a multi-level model, I will use snow as a group level predictor and temperature and nitrogen as plot level predictors. 
+
+The response variable I want to explore is first flowering date (FFD), which is measured in Julian days. There are 2 years of data of FFD, 2007 and 2008, though I intend to only study 2007 in order to simplify my model. There are FFDs for all the species present in the 48 plots, but only 3 species were present in all the plots: *Geum rossii* (forb), *Bistorta bistortoides* (forb), and *Deschampsia caespitosa* (graminoid). In the analysis of the model, I hope to address 2 research questions:
+
+(a) What drives alpine plant phenology? Does winter snowcover, summer air temp, N availability, or interactions of these factors change flowering date?    
+
+(b) Are some species more responsive in their phenology to environmental changes?
+
+# Conclusions
+By reanalyzing the work of Smith et al. [-@Smith2012] using a multi-level model, the proposed project will hopefully provide further biological insight into the role of snow, temperature, and N on plant phenology in the alpine. If the results are similar to the original findings, that will indicate strength in the author's conclusions. If the results are different, then the multi-level model may suggest alternative mechanisms or relationships that could help inform further research into alpine plant phenology. 

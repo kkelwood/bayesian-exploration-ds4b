@@ -1,0 +1,72 @@
+---
+title: "Homework for 10/31: Prepping to build the model"
+author: "Kelsey Elwood"
+date: "10/31/2018"
+output: 
+    github_document:
+        pandoc_args: --webtex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Background Information
+The data I am using for the individual project looks at the first flowering date (FFD) of various alpine species in response to increases in temperature, snowpack, and N. Data was collected for 2007 and 2008, though for now I am only looking at 2008 data. The data is structured with three blocks of 16 plots each. In each block, a snowfence bisects the block to form sub-blocks, with half of the plots on the windward (normal to reduced snowpack) and half of the plots on the leeward (increased snowpack) side of the fence. In each sub-block, 2 plots have warming treatments, 2 plots have increased nitrogen, 2 plots have both warming and increased nitrogen, and 2 plots are left as controls. Figure 1 (below) captures the conceptual layout of the plots.
+
+
+# 1. Scales of variables
+
+__Identify the scales of variation in the sampling design. What grouping variables are needed?__
+
+For this project, the scales of variation could be both spatial and temporal, but for now, I plan to only explore the spatial variation. There are 2 grouping variables that are nested: 3 blocks and 2 snow sub-blocks (separated by a snow fence) within each block. As I gain confidence with using multi-level models, I could include the 2 temporal groupings of 2007 and 2008. Initially, I plan to only use data from 2008, so I would not have any temporal groupings.
+
+_I'm still a little confused about the most appropriate way to address snow as a grouping variable versus a predictor variable. The intention of the experiment was to have snow be a predictor. The snow fence that creates the snow sub-block is purely a product of logistical constraints on how to produce plots with increased snow. Could you help me better understand the appropriate way to include snow in the model?_
+
+
+__Identify the scale of the response variable - this will be the smallest scale of sampling unit that you can estimate.__
+
+The response variable in this experiment is first flowering date (FFD) in 2008. Though many species were observed for FFD, only 5 had any data recorded. Of those 5, all had data missing from at least one plot:
+
+| Species | Number of plots without data |    
+| ------- | ---------------------------- |    
+| DESCAE | 1 |    
+| ACOROS | 4 |    
+| CALLEP | 8 |    
+| BISBIS | 12 |    
+| CARSCO | 33 |    
+
+I think I will limit my analysis to only DESCAE or ACOROS, but have also considered using 4-5 of these species. _Do you have any thoughts?_
+
+
+__Identify the scales of measurement for the predictor variables.__
+
+The predictor variables are (1) nitrogen and (2) temperature. The predictor variables are 
+
+__Make a sketch of your sample design, showing the different grouping scales and predictor scales.__
+
+![Figure 1. Schematic diagram of sampling design](figures/indiv-proj-method-schematic_kelsey-e.png)
+
+# 2. Model
+
+__Write down the statistical model for your design using mathematical notation.__
+
+The first equation describes the distribution of FFD between plots within, where $\mu_i$ is the average FFD in plots of three types: (1) Block 1, (2) Block 2, (3) Block 3.     
+$y_i \sim Binomial(\mu_i)$
+
+The second equation describes the distribution of FFD between plots within sub-blocks, where $\mu_j$ is the average FFD in plots of two types: (1) more snow, (2) less snow.    
+$\mu_i \sim Binomial(\mu_{j})$
+
+The average FFD ($\mu_j$) in more/less snow plots ($\mu_i$) is a function of whether the plot has extra N ($x_1$) or warmer temperatures ($x_2$):    
+$\mu_j = \alpha_j + \beta_1x_1 + \beta_1x_2$
+
+The fourth model equation describes the relationship BETWEEN sub-blocks:
+$\alpha_j \sim Normal(\bar{\mu}_a,\sigma_{\alpha})$
+
+where...    
+$\alpha_j$ is the mean FFD in a sub-block for a specific type of plot (N, temp)    
+$\bar{\mu}_a$ is the sub-block overall mean for a specific type of plot (N, temp)   
+$\sigma_{\alpha}$ is the variation in FFD between sub-blocks    
+
+__Write down the corresponding linear model formula for stan_lmer/stan_glmer.__
+
+`ppfit <- stan_glmer(FFD ~ snow + nitrogen + temperature + (1|block), REML=FALSE, data = nwt_ffd_data, family = gaussian)`
